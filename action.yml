@@ -1,0 +1,100 @@
+name: 'Deploy WordPress to Kinsta via sFTP'
+description: 'Efficiently deploy WordPress files to Kinsta hosting via sFTP with selective file synchronization'
+author: 'Salvador'
+
+branding:
+  icon: 'upload-cloud'
+  color: 'purple'
+
+inputs:
+  kinsta_host_ip:
+    description: 'Kinsta sFTP host IP address (required due to Cloudflare)'
+    required: true
+  kinsta_username:
+    description: 'Kinsta sFTP username'
+    required: true
+  kinsta_password:
+    description: 'Kinsta sFTP password'
+    required: true
+  kinsta_port:
+    description: 'Kinsta sFTP port (each site has a unique port)'
+    required: true
+  source_path:
+    description: 'Local source path to deploy (relative to repository root)'
+    required: false
+    default: '.'
+  target_path:
+    description: 'Remote target path on Kinsta server'
+    required: true
+  exclude_patterns:
+    description: 'Comma-separated list of patterns to exclude from deployment'
+    required: false
+    default: '.git,.github,node_modules,.env,.DS_Store,*.log'
+  dry_run:
+    description: 'Perform a dry run without actually transferring files'
+    required: false
+    default: 'false'
+  verbose:
+    description: 'Enable verbose logging'
+    required: false
+    default: 'false'
+  skip_wp_cli:
+    description: 'Skip wp-cli post-deployment actions'
+    required: false
+    default: 'false'
+  install_kinsta_mu_plugin:
+    description: 'Download and install Kinsta MU Plugin'
+    required: false
+    default: 'true'
+  kinsta_mu_plugin_path:
+    description: 'Custom path for Kinsta MU Plugin installation (relative to target_path)'
+    required: false
+    default: 'wp-content/mu-plugins'
+  purge_kinsta_cache:
+    description: 'Purge Kinsta cache after deployment using WP-CLI'
+    required: false
+    default: 'true'
+
+outputs:
+  files_transferred:
+    description: 'Number of files transferred'
+  bytes_transferred:
+    description: 'Total bytes transferred'
+  deployment_time:
+    description: 'Time taken for deployment in seconds'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Dependencies
+      shell: bash
+      run: |
+        echo "Installing required dependencies..."
+        sudo apt-get update -qq
+        sudo apt-get install -y lftp rsync
+        
+    - name: Deploy to Kinsta
+      shell: bash
+      env:
+        KINSTA_HOST_IP: ${{ inputs.kinsta_host_ip }}
+        KINSTA_USERNAME: ${{ inputs.kinsta_username }}
+        KINSTA_PASSWORD: ${{ inputs.kinsta_password }}
+        KINSTA_PORT: ${{ inputs.kinsta_port }}
+        SOURCE_PATH: ${{ inputs.source_path }}
+        TARGET_PATH: ${{ inputs.target_path }}
+        EXCLUDE_PATTERNS: ${{ inputs.exclude_patterns }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        VERBOSE: ${{ inputs.verbose }}
+        INSTALL_KINSTA_MU_PLUGIN: ${{ inputs.install_kinsta_mu_plugin }}
+        KINSTA_MU_PLUGIN_PATH: ${{ inputs.kinsta_mu_plugin_path }}
+        PURGE_KINSTA_CACHE: ${{ inputs.purge_kinsta_cache }}
+      run: ${{ github.action_path }}/scripts/deploy.sh
+      
+    - name: Set Outputs
+      shell: bash
+      run: |
+        if [ -f /tmp/deployment_stats.txt ]; then
+          echo "files_transferred=$(grep 'FILES_TRANSFERRED:' /tmp/deployment_stats.txt | cut -d: -f2)" >> $GITHUB_OUTPUT
+          echo "bytes_transferred=$(grep 'BYTES_TRANSFERRED:' /tmp/deployment_stats.txt | cut -d: -f2)" >> $GITHUB_OUTPUT
+          echo "deployment_time=$(grep 'DEPLOYMENT_TIME:' /tmp/deployment_stats.txt | cut -d: -f2)" >> $GITHUB_OUTPUT
+        fi

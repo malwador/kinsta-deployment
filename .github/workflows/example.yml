@@ -1,0 +1,51 @@
+# Example workflow showing how to use the Kinsta sFTP deployment action
+
+name: Deploy to Kinsta
+
+on:
+  push:
+    branches: [ main, production ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js (if needed for build process)
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    # Example: Build assets if needed
+    # - name: Install dependencies
+    #   run: npm ci
+    #   
+    # - name: Build assets
+    #   run: npm run build
+    
+    - name: Deploy to Kinsta
+      uses: ./
+      with:
+        kinsta_host_ip: ${{ secrets.KINSTA_HOST_IP }}
+        kinsta_username: ${{ secrets.KINSTA_USERNAME }}
+        kinsta_password: ${{ secrets.KINSTA_PASSWORD }}
+        kinsta_port: ${{ secrets.KINSTA_PORT }}
+        source_path: '.'
+        target_path: ${{ secrets.KINSTA_TARGET_PATH }}
+        exclude_patterns: '.git,.github,node_modules,.env,.DS_Store,*.log,wp-config-local.php'
+        dry_run: 'false'
+        verbose: 'true'
+        install_kinsta_mu_plugin: 'true'
+        kinsta_mu_plugin_path: 'wp-content/mu-plugins'
+        purge_kinsta_cache: 'true'
+        
+    - name: Display deployment results
+      run: |
+        echo "Files transferred: ${{ steps.deploy.outputs.files_transferred }}"
+        echo "Bytes transferred: ${{ steps.deploy.outputs.bytes_transferred }}"
+        echo "Deployment time: ${{ steps.deploy.outputs.deployment_time }} seconds"
