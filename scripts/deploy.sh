@@ -61,7 +61,7 @@ BYTES_TRANSFERRED=0
 
 # Create lftp script for efficient synchronization
 create_lftp_script() {
-    local script_file="/tmp/lftp_script.txt"
+    local script_file="./tmp/lftp_script.txt"
     
     cat > "$script_file" << EOF
 set sftp:auto-confirm yes
