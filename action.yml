@@ -71,7 +71,7 @@ runs:
       run: |
         echo "Installing required dependencies..."
         sudo apt-get update -qq
-        sudo apt-get install -y lftp rsync
+        sudo apt-get install -y rsync openssh-client
         
     - name: Deploy to Kinsta
       shell: bash

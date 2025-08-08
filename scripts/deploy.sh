@@ -59,99 +59,75 @@ START_TIME=$(date +%s)
 FILES_TRANSFERRED=0
 BYTES_TRANSFERRED=0
 
-# Create lftp script for efficient synchronization
-create_lftp_script() {
-    local script_file="./tmp/lftp_script.txt"
+# Build rsync command for efficient synchronization
+build_rsync_command() {
+    local rsync_opts=()
     
-    cat > "$script_file" << EOF
-set sftp:auto-confirm yes
-set sftp:connect-program "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-set net:timeout 30
-set net:max-retries 3
-set net:reconnect-interval-base 5
-
-# Connect to Kinsta
-open sftp://$KINSTA_USERNAME:$KINSTA_PASSWORD@$KINSTA_HOST_IP:$KINSTA_PORT
-
-# Set verbose mode if requested
-$([ "$VERBOSE" = "true" ] && echo "set cmd:verbose yes")
-
-# Change to target directory
-cd $TARGET_PATH
-
-# Local directory
-lcd $SOURCE_PATH
-
-# Mirror with options for efficiency
-mirror \\
-    --verbose=$([ "$VERBOSE" = "true" ] && echo "3" || echo "1") \\
-    --only-newer \\
-    --no-empty-dirs \\
-    --parallel=3 \\
-    $([ "$DRY_RUN" = "true" ] && echo "--dry-run") \\
-    $(build_exclude_options) \\
-    . .
-
-quit
-EOF
-
-    echo "$script_file"
+    # Base rsync options
+    rsync_opts+=("-avz")  # archive, verbose, compress
+    rsync_opts+=("--update")  # only transfer newer files
+    rsync_opts+=("--delete")  # delete files that don't exist in source
+    rsync_opts+=("--timeout=300")  # 5 minute timeout
+    
+    # SSH options for Kinsta
+    rsync_opts+=("-e")
+    rsync_opts+=("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $KINSTA_PORT")
+    
+    # Verbose mode
+    if [ "$VERBOSE" = "true" ]; then
+        rsync_opts+=("--progress")
+        rsync_opts+=("--stats")
+    else
+        rsync_opts+=("--quiet")
+    fi
+    
+    # Dry run mode
+    if [ "$DRY_RUN" = "true" ]; then
+        rsync_opts+=("--dry-run")
+    fi
+    
+    # Add exclude patterns
+    local exclude_opts
+    exclude_opts=$(build_rsync_exclude_options)
+    if [ -n "$exclude_opts" ]; then
+        rsync_opts+=($exclude_opts)
+    fi
+    
+    # Source and destination
+    rsync_opts+=("$SOURCE_PATH/")
+    rsync_opts+=("$KINSTA_USERNAME@$KINSTA_HOST_IP:$TARGET_PATH")
+    
+    echo "${rsync_opts[@]}"
 }
 
-# Build exclude options for lftp
-build_exclude_options() {
-    local exclude_opts=""
+# Build exclude options for rsync
+build_rsync_exclude_options() {
+    local exclude_opts=()
     IFS=',' read -ra PATTERNS <<< "$EXCLUDE_PATTERNS"
     
     for pattern in "${PATTERNS[@]}"; do
         pattern=$(echo "$pattern" | xargs) # trim whitespace
         if [ -n "$pattern" ]; then
-            exclude_opts="$exclude_opts --exclude-glob=$pattern"
+            exclude_opts+=("--exclude=$pattern")
         fi
     done
     
-    echo "$exclude_opts"
+    echo "${exclude_opts[@]}"
 }
 
-# Create rsync-based alternative for comparison/backup
-create_file_list() {
-    local list_file="/tmp/file_list.txt"
+# Test SSH connection to Kinsta server
+test_ssh_connection() {
+    log "Testing SSH connection to Kinsta server..."
     
-    log "Creating file list for transfer analysis..."
+    local ssh_test_cmd="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p $KINSTA_PORT $KINSTA_USERNAME@$KINSTA_HOST_IP 'echo \"SSH connection successful\"'"
     
-    # Build exclude options for find
-    local find_excludes=""
-    IFS=',' read -ra PATTERNS <<< "$EXCLUDE_PATTERNS"
-    
-    for pattern in "${PATTERNS[@]}"; do
-        pattern=$(echo "$pattern" | xargs)
-        if [ -n "$pattern" ]; then
-            # Convert glob pattern to find expression
-            case "$pattern" in
-                .*)
-                    find_excludes="$find_excludes -name '$pattern' -prune -o"
-                    ;;
-                *.*)
-                    find_excludes="$find_excludes -name '$pattern' -prune -o"
-                    ;;
-                *)
-                    find_excludes="$find_excludes -name '$pattern' -prune -o"
-                    ;;
-            esac
-        fi
-    done
-    
-    # Create file list with sizes and timestamps
-    cd "$SOURCE_PATH"
-    eval "find . $find_excludes -type f -print" | while read -r file; do
-        if [ -f "$file" ]; then
-            size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "0")
-            mtime=$(stat -f%m "$file" 2>/dev/null || stat -c%Y "$file" 2>/dev/null || echo "0")
-            echo "$file|$size|$mtime"
-        fi
-    done > "$list_file"
-    
-    echo "$list_file"
+    if eval "$ssh_test_cmd" 2>/dev/null; then
+        log_success "SSH connection test successful"
+        return 0
+    else
+        log_error "SSH connection test failed"
+        return 1
+    fi
 }
 
 # Generate deployment statistics
@@ -183,40 +159,58 @@ deploy() {
         exit 1
     fi
     
-    # Test sFTP connection
-    log "Testing sFTP connection..."
-    if ! lftp -c "open sftp://$KINSTA_USERNAME:$KINSTA_PASSWORD@$KINSTA_HOST_IP:$KINSTA_PORT; quit" 2>/dev/null; then
-        log_error "Failed to connect to Kinsta sFTP server"
+    # Test SSH connection
+    if ! test_ssh_connection; then
+        log_error "Failed to connect to Kinsta SSH server"
         exit 1
     fi
-    log_success "sFTP connection successful"
     
-    # Create file list for analysis
-    local file_list
-    file_list=$(create_file_list)
+    # Count files in source directory for statistics
     local total_files
-    total_files=$(wc -l < "$file_list")
+    total_files=$(find "$SOURCE_PATH" -type f | wc -l 2>/dev/null || echo "0")
+    log "Found $total_files files in source directory"
     
-    log "Found $total_files files to analyze for transfer"
+    # Build rsync command
+    local rsync_cmd
+    read -ra rsync_cmd <<< "$(build_rsync_command)"
     
-    # Create and execute lftp script
-    local lftp_script
-    lftp_script=$(create_lftp_script)
-    
-    log "Starting file synchronization..."
+    log "Starting file synchronization with rsync..."
     if [ "$VERBOSE" = "true" ]; then
-        log "Executing lftp script with verbose output..."
+        log "Executing rsync with verbose output..."
+        log "Command: rsync ${rsync_cmd[*]}"
     fi
     
-    # Execute lftp with progress monitoring
-    if lftp -f "$lftp_script" 2>&1 | tee /tmp/lftp_output.log; then
+    # Create temporary output file for rsync statistics
+    local rsync_output="/tmp/rsync_output.log"
+    
+    # Execute rsync with progress monitoring
+    if rsync "${rsync_cmd[@]}" 2>&1 | tee "$rsync_output"; then
         log_success "File synchronization completed successfully"
         
-        # Parse lftp output for statistics (basic parsing)
-        if [ -f /tmp/lftp_output.log ]; then
-            FILES_TRANSFERRED=$(grep -c "Transferring\|STOR\|get\|put" /tmp/lftp_output.log 2>/dev/null || echo "0")
-            # Estimate bytes transferred (this is approximate)
-            BYTES_TRANSFERRED=$(du -sb "$SOURCE_PATH" 2>/dev/null | cut -f1 || echo "0")
+        # Parse rsync output for statistics
+        if [ -f "$rsync_output" ]; then
+            # Extract statistics from rsync output
+            if grep -q "Number of files transferred" "$rsync_output"; then
+                FILES_TRANSFERRED=$(grep "Number of files transferred" "$rsync_output" | awk '{print $5}' | tr -d ',')
+            elif grep -q "sent.*bytes.*received.*bytes" "$rsync_output"; then
+                # Alternative parsing for different rsync output formats
+                FILES_TRANSFERRED=$(grep -c "^>" "$rsync_output" 2>/dev/null || echo "0")
+            else
+                FILES_TRANSFERRED="0"
+            fi
+            
+            # Extract bytes transferred
+            if grep -q "Total bytes sent" "$rsync_output"; then
+                BYTES_TRANSFERRED=$(grep "Total bytes sent" "$rsync_output" | awk '{print $4}' | tr -d ',')
+            elif grep -q "sent.*bytes" "$rsync_output"; then
+                BYTES_TRANSFERRED=$(grep "sent.*bytes" "$rsync_output" | sed 's/.*sent \([0-9,]*\) bytes.*/\1/' | tr -d ',')
+            else
+                # Fallback to source directory size
+                BYTES_TRANSFERRED=$(du -sb "$SOURCE_PATH" 2>/dev/null | cut -f1 || echo "0")
+            fi
+            
+            log "Files transferred: $FILES_TRANSFERRED"
+            log "Bytes transferred: $BYTES_TRANSFERRED"
         fi
     else
         log_error "File synchronization failed"
@@ -224,7 +218,7 @@ deploy() {
     fi
     
     # Clean up temporary files
-    rm -f "$lftp_script" "$file_list" /tmp/lftp_output.log
+    rm -f "$rsync_output"
     
     # Install Kinsta MU Plugin if enabled
     if [ "$INSTALL_KINSTA_MU_PLUGIN" = "true" ]; then

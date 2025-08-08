@@ -112,74 +112,76 @@ install_kinsta_mu_plugin() {
         find "$temp_dir" -type f -name "*.php" | head -10
     fi
     
-    # Install via sFTP
-    install_mu_plugin_via_sftp "$temp_dir" "$full_mu_plugin_path" "$verbose"
+    # Install via SSH/rsync
+    install_mu_plugin_via_ssh "$temp_dir" "$full_mu_plugin_path" "$verbose"
 }
 
-# Install MU Plugin files via sFTP
-install_mu_plugin_via_sftp() {
+# Install MU Plugin files via SSH/rsync
+install_mu_plugin_via_ssh() {
     local temp_dir="$1"
     local remote_mu_plugin_path="$2"
     local verbose="$3"
     
-    log "Installing MU Plugin files via sFTP..."
+    log "Installing MU Plugin files via SSH/rsync..."
     
-    # Create lftp script for MU plugin installation
-    local lftp_script="/tmp/lftp_mu_plugin_script.txt"
+    # Create remote directory first
+    log "Creating remote MU Plugin directory..."
+    local ssh_cmd="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $KINSTA_PORT $KINSTA_USERNAME@$KINSTA_HOST_IP"
     
-    cat > "$lftp_script" << EOF
-set sftp:auto-confirm yes
-set sftp:connect-program "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-set net:timeout 30
-set net:max-retries 3
-set net:reconnect-interval-base 5
-
-# Connect to Kinsta
-open sftp://$KINSTA_USERNAME:$KINSTA_PASSWORD@$KINSTA_HOST_IP:$KINSTA_PORT
-
-# Set verbose mode if requested
-$([ "$verbose" = "true" ] && echo "set cmd:verbose yes")
-
-# Create the mu-plugins directory if it doesn't exist
-mkdir -pf $remote_mu_plugin_path
-
-# Change to the mu-plugins directory
-cd $remote_mu_plugin_path
-
-# Upload the MU plugin files
-$(find "$temp_dir" -name "*.php" -type f | while read -r file; do
-    local_file="$file"
-    filename=$(basename "$file")
-    echo "put \"$local_file\" \"$filename\""
-done)
-
-# Also upload any subdirectories (like kinsta-mu-plugins folder)
-$(if [ -d "$temp_dir/kinsta-mu-plugins" ]; then
-    echo "mirror --reverse --verbose=$([ "$verbose" = "true" ] && echo "3" || echo "1") \"$temp_dir/kinsta-mu-plugins\" kinsta-mu-plugins"
-fi)
-
-quit
-EOF
-
-    # Execute lftp script
-    if [ "$verbose" = "true" ]; then
-        log "Executing sFTP upload with verbose output..."
+    if $ssh_cmd "mkdir -p '$remote_mu_plugin_path'" 2>/dev/null; then
+        log_success "Remote MU Plugin directory created/verified"
+    else
+        log_warning "Could not create remote directory, rsync will attempt to create it"
     fi
     
-    if lftp -f "$lftp_script" 2>&1 | tee /tmp/lftp_mu_plugin_output.log; then
-        log_success "Kinsta MU Plugin installed successfully via sFTP"
+    # Build rsync command for MU Plugin files
+    local rsync_opts=()
+    rsync_opts+=("-avz")  # archive, verbose, compress
+    rsync_opts+=("--timeout=300")  # 5 minute timeout
+    rsync_opts+=("-e")
+    rsync_opts+=("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $KINSTA_PORT")
+    
+    # Verbose mode
+    if [ "$verbose" = "true" ]; then
+        rsync_opts+=("--progress")
+        rsync_opts+=("--stats")
+    else
+        rsync_opts+=("--quiet")
+    fi
+    
+    # Source and destination
+    rsync_opts+=("$temp_dir/")
+    rsync_opts+=("$KINSTA_USERNAME@$KINSTA_HOST_IP:$remote_mu_plugin_path/")
+    
+    # Execute rsync
+    if [ "$verbose" = "true" ]; then
+        log "Executing rsync with verbose output..."
+        log "Command: rsync ${rsync_opts[*]}"
+    fi
+    
+    local rsync_output="/tmp/rsync_mu_plugin_output.log"
+    
+    if rsync "${rsync_opts[@]}" 2>&1 | tee "$rsync_output"; then
+        log_success "Kinsta MU Plugin installed successfully via rsync"
         
         # Count uploaded files
-        local uploaded_files
-        uploaded_files=$(grep -c "Transferring\|STOR\|put" /tmp/lftp_mu_plugin_output.log 2>/dev/null || echo "0")
+        local uploaded_files="0"
+        if [ -f "$rsync_output" ]; then
+            if grep -q "Number of files transferred" "$rsync_output"; then
+                uploaded_files=$(grep "Number of files transferred" "$rsync_output" | awk '{print $5}' | tr -d ',')
+            else
+                uploaded_files=$(find "$temp_dir" -type f | wc -l 2>/dev/null || echo "0")
+            fi
+        fi
+        
         log_success "Uploaded $uploaded_files MU Plugin files"
     else
-        log_error "Failed to install MU Plugin via sFTP"
+        log_error "Failed to install MU Plugin via rsync"
         return 1
     fi
     
-    # Clean up temporary lftp script
-    rm -f "$lftp_script" /tmp/lftp_mu_plugin_output.log
+    # Clean up temporary files
+    rm -f "$rsync_output"
 }
 
 # Validate Kinsta MU Plugin installation
@@ -189,31 +191,16 @@ validate_mu_plugin_installation() {
     
     log "Validating MU Plugin installation..."
     
-    # Create lftp script to check if files exist
-    local lftp_check_script="/tmp/lftp_check_mu_plugin.txt"
+    # Use SSH to check if files exist
+    local ssh_cmd="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p $KINSTA_PORT $KINSTA_USERNAME@$KINSTA_HOST_IP"
     
-    cat > "$lftp_check_script" << EOF
-set sftp:auto-confirm yes
-set sftp:connect-program "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-
-# Connect to Kinsta
-open sftp://$KINSTA_USERNAME:$KINSTA_PASSWORD@$KINSTA_HOST_IP:$KINSTA_PORT
-
-# Check if main MU plugin file exists
-cd $remote_mu_plugin_path
-ls -la kinsta-mu-plugins.php || echo "Main plugin file not found"
-ls -la kinsta-mu-plugins/ || echo "Plugin directory not found"
-
-quit
-EOF
-
-    if lftp -f "$lftp_check_script" 2>/dev/null | grep -q "kinsta-mu-plugins"; then
+    local check_cmd="ls -la '$remote_mu_plugin_path/kinsta-mu-plugins.php' '$remote_mu_plugin_path/kinsta-mu-plugins/' 2>/dev/null"
+    
+    if $ssh_cmd "$check_cmd" 2>/dev/null | grep -q "kinsta-mu-plugins"; then
         log_success "MU Plugin installation validated successfully"
     else
-        log_warning "Could not validate MU Plugin installation"
+        log_warning "Could not validate MU Plugin installation - files may not be accessible via SSH"
     fi
-    
-    rm -f "$lftp_check_script"
 }
 
 # Main execution function

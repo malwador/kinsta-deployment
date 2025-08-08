@@ -53,8 +53,7 @@ check_dependencies() {
     echo -e "${BLUE}Checking required commands...${NC}"
     
     # Essential commands for the action
-    check_command "lftp" "FTP client for file synchronization" "apt-get install lftp (Ubuntu) or brew install lftp (macOS)" || ((missing_deps++))
-    check_command "rsync" "File synchronization utility" "apt-get install rsync (Ubuntu) or brew install rsync (macOS)" || ((missing_deps++))
+    check_command "rsync" "File synchronization utility via SSH" "apt-get install rsync (Ubuntu) or brew install rsync (macOS)" || ((missing_deps++))
     check_command "ssh" "SSH client for secure connections" "apt-get install openssh-client (Ubuntu)" || ((missing_deps++))
     check_command "curl" "HTTP client for downloading files" "apt-get install curl (Ubuntu) or brew install curl (macOS)" || ((missing_deps++))
     check_command "unzip" "ZIP archive extraction utility" "apt-get install unzip (Ubuntu) or brew install unzip (macOS)" || ((missing_deps++))
@@ -119,19 +118,30 @@ check_action_structure() {
     done
 }
 
-# Test lftp functionality
-test_lftp() {
-    echo -e "${BLUE}Testing lftp functionality...${NC}"
+# Test rsync and SSH functionality
+test_rsync_ssh() {
+    echo -e "${BLUE}Testing rsync and SSH functionality...${NC}"
     
-    if command -v lftp &> /dev/null; then
-        # Test basic lftp syntax
-        if lftp -c "help" &> /dev/null; then
-            echo -e "${GREEN}✅ lftp is working correctly${NC}"
+    if command -v rsync &> /dev/null; then
+        # Test basic rsync syntax
+        if rsync --version &> /dev/null; then
+            echo -e "${GREEN}✅ rsync is working correctly${NC}"
         else
-            echo -e "${YELLOW}⚠️  lftp may have issues${NC}"
+            echo -e "${YELLOW}⚠️  rsync may have issues${NC}"
         fi
     else
-        echo -e "${RED}❌ lftp not available for testing${NC}"
+        echo -e "${RED}❌ rsync not available for testing${NC}"
+    fi
+    
+    if command -v ssh &> /dev/null; then
+        # Test basic SSH syntax
+        if ssh -V &> /dev/null; then
+            echo -e "${GREEN}✅ SSH client is working correctly${NC}"
+        else
+            echo -e "${YELLOW}⚠️  SSH client may have issues${NC}"
+        fi
+    else
+        echo -e "${RED}❌ SSH client not available for testing${NC}"
     fi
 }
 
@@ -150,7 +160,7 @@ main() {
     check_action_structure
     echo ""
     
-    test_lftp
+    test_rsync_ssh
     echo ""
     
     if [ $deps_ok -eq 0 ]; then

@@ -4,8 +4,8 @@ A GitHub Action for efficiently deploying WordPress websites to Kinsta hosting v
 
 ## ✨ Features
 
-- **Efficient File Synchronization**: Only transfers files with newer timestamps or different sizes
-- **Secure sFTP Connection**: Uses secure file transfer protocol with authentication
+- **Efficient File Synchronization**: Only transfers files with newer timestamps or different sizes using rsync
+- **Secure SSH Connection**: Uses SSH for secure file transfer and command execution
 - **Selective Deployment**: Configurable file exclusion patterns
 - **Detailed Logging**: Comprehensive deployment statistics and verbose output options
 - **Dry Run Support**: Test deployments without actually transferring files
