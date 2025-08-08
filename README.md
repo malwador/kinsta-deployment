@@ -88,6 +88,7 @@ This action automatically downloads and installs the [official Kinsta MU Plugin]
 - **Automatic Download**: Fetches the latest version directly from Kinsta
 - **Custom Installation Path**: Configure for different WordPress setups (standard, Bedrock, etc.)
 - **Safe Installation**: Creates directories if they don't exist
+- **Clean Upload**: Excludes ZIP files and system files from upload
 - **Validation**: Verifies successful installation
 
 ### Standard WordPress Installation

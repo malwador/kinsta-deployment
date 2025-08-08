@@ -59,14 +59,14 @@ START_TIME=$(date +%s)
 FILES_TRANSFERRED=0
 BYTES_TRANSFERRED=0
 
-# Build rsync command for efficient synchronization
+# Build rsync command (returns space-separated command for execution)
 build_rsync_command() {
     local rsync_opts=()
     
     # Base rsync options
     rsync_opts+=("-avz")  # archive, verbose, compress
     rsync_opts+=("--update")  # only transfer newer files
-    rsync_opts+=("--delete")  # delete files that don't exist in source
+    #rsync_opts+=("--delete")  # delete files that don't exist in source
     rsync_opts+=("--timeout=300")  # 5 minute timeout
     
     # SSH options for Kinsta
@@ -87,33 +87,22 @@ build_rsync_command() {
     fi
     
     # Add exclude patterns
-    local exclude_opts
-    exclude_opts=$(build_rsync_exclude_options)
-    if [ -n "$exclude_opts" ]; then
-        rsync_opts+=($exclude_opts)
-    fi
+    IFS=',' read -ra PATTERNS <<< "$EXCLUDE_PATTERNS"
+    for pattern in "${PATTERNS[@]}"; do
+        pattern=$(echo "$pattern" | xargs) # trim whitespace
+        if [ -n "$pattern" ]; then
+            rsync_opts+=("--exclude=$pattern")
+        fi
+    done
     
     # Source and destination
     rsync_opts+=("$SOURCE_PATH/")
     rsync_opts+=("$KINSTA_USERNAME@$KINSTA_HOST_IP:$TARGET_PATH")
     
-    echo "${rsync_opts[@]}"
+    printf '%q ' "${rsync_opts[@]}"
 }
 
-# Build exclude options for rsync
-build_rsync_exclude_options() {
-    local exclude_opts=()
-    IFS=',' read -ra PATTERNS <<< "$EXCLUDE_PATTERNS"
-    
-    for pattern in "${PATTERNS[@]}"; do
-        pattern=$(echo "$pattern" | xargs) # trim whitespace
-        if [ -n "$pattern" ]; then
-            exclude_opts+=("--exclude=$pattern")
-        fi
-    done
-    
-    echo "${exclude_opts[@]}"
-}
+
 
 # Test SSH connection to Kinsta server
 test_ssh_connection() {
@@ -172,19 +161,19 @@ deploy() {
     
     # Build rsync command
     local rsync_cmd
-    read -ra rsync_cmd <<< "$(build_rsync_command)"
+    rsync_cmd=$(build_rsync_command)
     
     log "Starting file synchronization with rsync..."
     if [ "$VERBOSE" = "true" ]; then
         log "Executing rsync with verbose output..."
-        log "Command: rsync ${rsync_cmd[*]}"
+        log "Command: rsync $rsync_cmd"
     fi
     
     # Create temporary output file for rsync statistics
     local rsync_output="/tmp/rsync_output.log"
     
     # Execute rsync with progress monitoring
-    if rsync "${rsync_cmd[@]}" 2>&1 | tee "$rsync_output"; then
+    if eval "rsync $rsync_cmd" 2>&1 | tee "$rsync_output"; then
         log_success "File synchronization completed successfully"
         
         # Parse rsync output for statistics

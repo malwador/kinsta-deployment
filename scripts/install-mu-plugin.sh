@@ -106,6 +106,10 @@ install_kinsta_mu_plugin() {
     
     log_success "Kinsta MU Plugin extracted successfully"
     
+    # Remove the ZIP file after extraction to prevent it from being uploaded
+    rm -f "$temp_dir/kinsta-mu-plugins.zip"
+    log "Removed ZIP file from temporary directory"
+    
     # List extracted contents for debugging
     if [ "$verbose" = "true" ]; then
         log "Extracted contents:"
@@ -140,6 +144,16 @@ install_mu_plugin_via_ssh() {
     rsync_opts+=("--timeout=300")  # 5 minute timeout
     rsync_opts+=("-e")
     rsync_opts+=("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $KINSTA_PORT")
+    
+    # Exclude the ZIP file and other unwanted files
+    rsync_opts+=("--exclude=*.zip")
+    rsync_opts+=("--exclude=kinsta-mu-plugins.zip")
+    rsync_opts+=("--exclude=__MACOSX")
+    rsync_opts+=("--exclude=.DS_Store")
+    
+    if [ "$verbose" = "true" ]; then
+        log "Excluding files: *.zip, kinsta-mu-plugins.zip, __MACOSX, .DS_Store"
+    fi
     
     # Verbose mode
     if [ "$verbose" = "true" ]; then
